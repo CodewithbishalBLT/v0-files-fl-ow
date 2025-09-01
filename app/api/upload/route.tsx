@@ -4,11 +4,42 @@ import nodemailer from "nodemailer"
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
-    const email = formData.get("email") as string
+    const recipientsData = formData.get("recipients") as string
 
-    if (!email) {
-      return NextResponse.json({ error: "Email is required" }, { status: 400 })
+    if (!recipientsData) {
+      return NextResponse.json({ error: "Recipients are required" }, { status: 400 })
     }
+
+    let recipients: string[]
+    try {
+      recipients = JSON.parse(recipientsData)
+    } catch {
+      return NextResponse.json({ error: "Invalid recipients format" }, { status: 400 })
+    }
+
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return NextResponse.json({ error: "At least one recipient is required" }, { status: 400 })
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    const invalidEmails = recipients.filter((email) => !emailRegex.test(email))
+    if (invalidEmails.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Invalid email addresses: ${invalidEmails.join(", ")}`,
+        },
+        { status: 400 },
+      )
+    }
+
+
+    // Derive client IP from headers (NextRequest in route handlers has no 'ip' property)
+    const forwardedFor = request.headers.get("x-forwarded-for")
+    const senderIP = (forwardedFor?.split(",")[0] || request.headers.get("x-real-ip") || "Unknown").trim()
+    const userAgent = request.headers.get("user-agent") || "Unknown"
+    const acceptLanguage = request.headers.get("accept-language") || "Unknown"
+    const referer = request.headers.get("referer") || "Direct access"
+    const timestamp = new Date().toISOString()
 
     // Extract files from formData
     const files: { filename: string; content: Buffer }[] = []
@@ -47,7 +78,7 @@ export async function POST(request: NextRequest) {
     // Send email with attachments
     const mailOptions = {
       from: `"FilesFlow" <${process.env.ZOHO_EMAIL}>`,
-      to: email,
+      to: recipients.join(", "),
       subject: `FilesFlow - Your uploaded files - ${files.length} file(s)`,
       html: `
         <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
@@ -77,11 +108,28 @@ export async function POST(request: NextRequest) {
       ${files.map((file) => `<li style="margin: 6px 0;">${file.filename}</li>`).join("")}
     </ul>
   </div>
+
+    
+  <!-- Sender Information -->
+  <div style="background-color: #f3f4f6; padding: 18px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #10b981;">
+    <h3 style="margin: 0 0 10px 0; font-size: 16px; color: #1f2937; border-bottom: 1px solid #d1d5db; padding-bottom: 8px;">
+      📊 Sender Information
+    </h3>
+    <div style="font-size: 13px; color: #4b5563; line-height: 1.6;">
+      <p style="margin: 4px 0;"><strong>IP Address:</strong> ${senderIP}</p>
+      <p style="margin: 4px 0;"><strong>Browser:</strong> ${userAgent}</p>
+      <p style="margin: 4px 0;"><strong>Language:</strong> ${acceptLanguage}</p>
+      <p style="margin: 4px 0;"><strong>Referrer:</strong> ${referer}</p>
+      <p style="margin: 4px 0;"><strong>Timestamp:</strong> ${timestamp}</p>
+    </div>
+  </div>
   
   <!-- Footer -->
   <p style="font-size: 14px; color: #6b7280; margin-top: 32px; line-height: 1.5;">
     Best regards, <br>
-    <strong style="color: #111827;">FilesFlow</strong>  
+    <strong style="color: #111827;"><a href="https://filesflow.web.app" target="_blank" style="color: #2563eb; text-decoration: none; font-weight: 500;">
+      FilesFlow
+    </a></strong>  
     <span style="color: #9ca3af;">— Made with ❤️ by</span> 
     <a href="https://www.linkedin.com/in/bishal-das-bd/" target="_blank" style="color: #2563eb; text-decoration: none; font-weight: 500;">
       Bishal Das
@@ -97,7 +145,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Successfully sent ${files.length} file(s) to ${email}`,
+      message: `Successfully sent ${files.length} file(s) to ${recipients.length} recipient(s)`,
     })
   } catch (error) {
     console.error("Upload/Email error:", error)
